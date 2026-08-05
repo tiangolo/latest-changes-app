@@ -45,7 +45,7 @@ def test_issue_installation_token_is_repository_scoped(
             json={
                 "token": "ghs_secret",
                 "expires_at": "2026-07-30T15:00:00Z",
-                "permissions": {"contents": "write"},
+                "permissions": {"contents": "write", "metadata": "read"},
                 "repository_selection": "selected",
                 "repositories": [{"id": 75369425}],
             },
@@ -78,15 +78,24 @@ def test_issue_installation_token_is_repository_scoped(
     ("token_data", "repositories"),
     [
         (
-            {"permissions": {"contents": "read"}, "repository_selection": "selected"},
+            {
+                "permissions": {"contents": "read", "metadata": "read"},
+                "repository_selection": "selected",
+            },
             [{"id": 75369425}],
         ),
         (
-            {"permissions": {"contents": "write"}, "repository_selection": "all"},
+            {
+                "permissions": {"contents": "write", "metadata": "read"},
+                "repository_selection": "all",
+            },
             [{"id": 75369425}],
         ),
         (
-            {"permissions": {"contents": "write"}, "repository_selection": "selected"},
+            {
+                "permissions": {"contents": "write", "metadata": "read"},
+                "repository_selection": "selected",
+            },
             [{"id": 1}],
         ),
     ],
@@ -94,6 +103,7 @@ def test_issue_installation_token_is_repository_scoped(
 def test_issue_installation_token_rejects_unexpected_scope(
     settings: Settings,
     repository: Repository,
+    caplog: pytest.LogCaptureFixture,
     token_data: dict[str, object],
     repositories: list[dict[str, int]],
 ) -> None:
@@ -120,10 +130,13 @@ def test_issue_installation_token_rejects_unexpected_scope(
     ):
         issue_installation_token(repository, settings, client)
 
+    assert "unexpected installation token scope" in caplog.text
 
-def test_issue_installation_token_hides_github_error(
+
+def test_issue_installation_token_reports_installation_lookup_error(
     settings: Settings,
     repository: Repository,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, request=request)
@@ -136,6 +149,62 @@ def test_issue_installation_token_hides_github_error(
         pytest.raises(GitHubAPIError, match="installation token"),
     ):
         issue_installation_token(repository, settings, client)
+
+    assert "get_repository_installation failed with status 404" in caplog.text
+
+
+def test_issue_installation_token_reports_token_request_error(
+    settings: Settings,
+    repository: Repository,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/installation"):
+            return httpx.Response(200, json={"id": 987}, request=request)
+        return httpx.Response(403, request=request)
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="installation token"),
+    ):
+        issue_installation_token(repository, settings, client)
+
+    assert "create_installation_token failed with status 403" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("invalid_response", "expected_log"),
+    [
+        ("installation", "invalid repository installation response"),
+        ("token", "invalid installation token response"),
+    ],
+)
+def test_issue_installation_token_reports_invalid_response(
+    settings: Settings,
+    repository: Repository,
+    caplog: pytest.LogCaptureFixture,
+    invalid_response: str,
+    expected_log: str,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/installation"):
+            data = {} if invalid_response == "installation" else {"id": 987}
+            return httpx.Response(200, json=data, request=request)
+        return httpx.Response(201, json={}, request=request)
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="installation token"),
+    ):
+        issue_installation_token(repository, settings, client)
+
+    assert expected_log in caplog.text
 
 
 @pytest.mark.parametrize(

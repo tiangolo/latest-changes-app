@@ -111,7 +111,7 @@ def test_webhook_updates_release_notes(
                 json={
                     "token": "ghs_token",
                     "expires_at": "2026-07-30T15:00:00Z",
-                    "permissions": {"contents": "write"},
+                    "permissions": {"contents": "write", "metadata": "read"},
                     "repository_selection": "selected",
                     "repositories": [{"id": 75369425}],
                 },
@@ -297,7 +297,7 @@ def test_webhook_reports_processing_error(
                 json={
                     "token": "ghs_token",
                     "expires_at": "2026-07-30T15:00:00Z",
-                    "permissions": {"contents": "write"},
+                    "permissions": {"contents": "write", "metadata": "read"},
                     "repository_selection": "selected",
                     "repositories": [{"id": 75369425}],
                 },

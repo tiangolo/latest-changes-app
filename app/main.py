@@ -1,7 +1,9 @@
 import hashlib
 import hmac
 import logging
+import tomllib
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Annotated
 
 import httpx
@@ -19,7 +21,13 @@ logger = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
-app = FastAPI(title="Latest Changes")
+with (Path(__file__).parent.parent / "pyproject.toml").open("rb") as pyproject_file:
+    app_version = tomllib.load(pyproject_file)["project"]["version"]
+
+app = FastAPI(
+    title="Latest Changes",
+    version=app_version,
+)
 
 
 def get_github_client() -> Iterator[httpx.Client]:

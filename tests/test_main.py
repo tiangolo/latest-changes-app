@@ -1,7 +1,9 @@
 import base64
 import json
 import logging
+import tomllib
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -78,6 +80,15 @@ def test_health(api_client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_openapi_version(api_client: TestClient) -> None:
+    response = api_client.get("/openapi.json")
+
+    with Path("pyproject.toml").open("rb") as pyproject_file:
+        project_version = tomllib.load(pyproject_file)["project"]["version"]
+    assert response.status_code == 200
+    assert response.json()["info"]["version"] == project_version
 
 
 def test_webhook_route_requires_github_headers(api_client: TestClient) -> None:

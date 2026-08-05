@@ -75,6 +75,13 @@ def client_factory(
         client.close()
 
 
+def test_root(api_client: TestClient) -> None:
+    response = api_client.get("/")
+
+    assert response.status_code == 200
+    assert response.json() == {"name": app.title, "version": app.version}
+
+
 def test_health(api_client: TestClient) -> None:
     response = api_client.get("/health")
 

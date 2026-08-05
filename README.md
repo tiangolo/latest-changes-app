@@ -1,6 +1,6 @@
 # Latest Changes
 
-A GitHub App that updates release notes when a pull request is merged into a repository's default branch. It replaces the `tiangolo/latest-changes` GitHub Action.
+A GitHub App that updates release notes when a pull request is merged into a repository's default branch.
 
 It looks for the first existing file in this order:
 
@@ -9,7 +9,9 @@ It looks for the first existing file in this order:
 3. `docs/en/docs/release-notes.md`
 4. `CHANGELOG.md`
 
-The file must contain `## Latest Changes`. The first matching pull request label determines the section:
+The file must contain `## Latest Changes`. That section may contain only the `###` sections listed below, with each section appearing at most once.
+
+The first matching pull request label determines the section:
 
 | Label | Section |
 | --- | --- |
@@ -24,58 +26,69 @@ The file must contain `## Latest Changes`. The first matching pull request label
 | `infra` | Infrastructure |
 | `internal` | Internal |
 
+If none of these labels match, the entry is added directly under `## Latest Changes`.
+
 Pull requests with the `release` label are skipped.
 
-The App verifies each webhook signature, requests a short-lived installation token for only the webhook repository, and updates the file through GitHub's Contents API. It requests `contents: write`; GitHub also includes the required `metadata: read` permission. It never clones or executes repository code.
+## Install
 
-## Development
+You can install the [GitHub App](https://github.com/apps/latest-changes).
 
-Set the environment variables:
+It needs the following permissions:
 
-```dotenv
-GITHUB_CLIENT_ID=Iv23exampleClientId
-GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
-...
------END PRIVATE KEY-----"
-GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret
-```
+| Permission | Access |
+| --- | --- |
+| Contents | Read and write |
+| Pull requests | Read |
+| Metadata | Read (automatically included) |
 
-Run it locally:
+The app commits directly to the repository's default branch. If a ruleset prevents direct writes, add the GitHub App to its bypass list with **Always allow**.
 
-```console
-uv run fastapi dev
-```
+## Self Host
 
-## Deploy
+If you prefer, you can self host it.
 
-You can deploy to [FastAPI Cloud](https://fastapicloud.dev) or any other hosting provider that supports Python and FastAPI.
+### Deploy
+
+You can deploy it to [FastAPI Cloud](https://fastapicloud.dev):
 
 ```bash
 uv run fastapi deploy
 ```
 
-Then make sure to set the secrets and env vars in the FastAPI Cloud dashboard.
+### Create a GitHub App
 
-To deploy automatically, configure these GitHub repository variables and secrets:
+Create a new [GitHub App](https://github.com/settings/apps).
 
-| Type | Development | Production |
-| --- | --- | --- |
-| Variable | `FASTAPI_CLOUD_DEVELOPMENT_APP_ID` | `FASTAPI_CLOUD_PRODUCTION_APP_ID` |
-| Secret | `FASTAPI_CLOUD_DEVELOPMENT_TOKEN` | `FASTAPI_CLOUD_PRODUCTION_TOKEN` |
-
-Merges to `main` deploy to development. Publishing a GitHub release deploys its tag to production. Either deployment stays disabled when its App ID variable is not configured.
-
-The Prepare Release workflow requires a repository secret named `RELEASE_PR_TOKEN`. It creates a release pull request. Merging that pull request creates a draft GitHub release; publishing the draft deploys it to production.
-
-## GitHub App
-
-Configure the App with `Contents: Read and write`, `Pull requests: Read`, the `Pull request` event, and this webhook URL:
+Enable webhooks, and set the URL to your app:
 
 ```text
 https://your-app.fastapicloud.dev/webhooks/github
 ```
 
-Install it only on the repositories it should update. Add the App to the repository ruleset bypass list when needed.
+Create a webhook secret, e.g. with:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_urlsafe())"
+```
+
+Save it in the webhooks secret field.
+
+Subscribe to the **Pull request** event and configure the repository permissions listed above.
+
+After creating the app, generate and download a private key.
+
+Configure these values in your FastAPI Cloud dashboard:
+
+| Name | Type | Value |
+| --- | --- | --- |
+| `GITHUB_CLIENT_ID` | Environment variable | The Client ID from the GitHub App settings |
+| `GITHUB_APP_PRIVATE_KEY` | Secret | The complete contents of the downloaded private key |
+| `GITHUB_WEBHOOK_SECRET` | Secret | The same generated value configured as the webhook secret |
+
+### Install
+
+You can go to your GitHub App settings, to the "Install App" section, and install it to your repositories.
 
 ## License
 

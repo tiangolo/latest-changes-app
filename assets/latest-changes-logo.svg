@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Latest Changes</title>
+  <rect width="512" height="512" rx="72" fill="#19324d"/>
+  <circle cx="72" cy="224" r="22" fill="#fff"/>
+  <rect x="112" y="202" width="350" height="44" rx="22" fill="#fff"/>
+  <circle cx="72" cy="320" r="22" fill="#fff"/>
+  <rect x="112" y="298" width="350" height="44" rx="22" fill="#fff"/>
+  <circle cx="72" cy="416" r="22" fill="#fff"/>
+  <rect x="112" y="394" width="350" height="44" rx="22" fill="#fff"/>
+  <path fill="#ffbe0b" d="M406 48c6 36 20 50 56 56-36 6-50 20-56 56-6-36-20-50-56-56 36-6 50-20 56-56Z"/>
+</svg>

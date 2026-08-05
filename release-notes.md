@@ -2,6 +2,10 @@
 
 ## Latest Changes
 
+### Features
+
+* ✨ Show app version in OpenAPI. PR [#3](https://github.com/tiangolo/latest-changes-app/pull/3) by [@tiangolo](https://github.com/tiangolo).
+
 ## 0.0.2 (2026-08-05)
 
 * Initial release.

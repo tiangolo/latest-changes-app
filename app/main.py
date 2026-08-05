@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -13,6 +14,8 @@ from app.latest_changes import LatestChangesError, update_latest_changes
 from app.models import PullRequestWebhook, WebhookResponse
 
 MAX_WEBHOOK_BODY_SIZE = 1_000_000
+
+logger = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -79,6 +82,7 @@ def process_pull_request_webhook(
 async def get_webhook(
     request: Request,
     settings: SettingsDep,
+    github_delivery: Annotated[str, Header(alias="X-GitHub-Delivery")],
     github_event: Annotated[str, Header(alias="X-GitHub-Event")],
     github_signature: Annotated[str, Header(alias="X-Hub-Signature-256")],
 ) -> PullRequestWebhook | None:
@@ -97,6 +101,11 @@ async def get_webhook(
         body,
         github_signature,
         settings.github_webhook_secret.get_secret_value(),
+    )
+    logger.info(
+        "Received GitHub webhook delivery %s event=%s",
+        github_delivery,
+        github_event,
     )
     if github_event != "pull_request":
         return None

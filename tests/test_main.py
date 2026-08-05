@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -96,9 +97,11 @@ def test_verify_webhook_signature_uses_github_test_vector() -> None:
 def test_webhook_updates_release_notes(
     webhook_payload: dict[str, Any],
     api_client: TestClient,
+    caplog: pytest.LogCaptureFixture,
     sign: Callable[[bytes], str],
     client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
 ) -> None:
+    caplog.set_level(logging.INFO, logger="app.main")
     requests: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -139,6 +142,7 @@ def test_webhook_updates_release_notes(
         "/webhooks/github",
         content=body,
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "pull_request",
             "X-Hub-Signature-256": sign(body),
         },
@@ -154,6 +158,7 @@ def test_webhook_updates_release_notes(
     assert update["sha"] == "blob-sha"
     assert update["branch"] == "master"
     assert "### Features" in base64.b64decode(update["content"]).decode()
+    assert "delivery test-delivery event=pull_request" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -184,6 +189,7 @@ def test_webhook_skips_unapproved_pull_request(
         "/webhooks/github",
         content=body,
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "pull_request",
             "X-Hub-Signature-256": sign(body),
         },
@@ -208,6 +214,7 @@ def test_webhook_skips_other_event(
         "/webhooks/github",
         content=body,
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "ping",
             "X-Hub-Signature-256": sign(body),
         },
@@ -230,6 +237,7 @@ def test_webhook_rejects_invalid_signature(
         "/webhooks/github",
         content=b"{}",
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "ping",
             "X-Hub-Signature-256": "sha256=invalid",
         },
@@ -249,6 +257,7 @@ def test_webhook_rejects_invalid_payload(
         "/webhooks/github",
         content=body,
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "pull_request",
             "X-Hub-Signature-256": sign(body),
         },
@@ -266,6 +275,7 @@ def test_webhook_rejects_large_payload(
         "/webhooks/github",
         content=b"x" * (MAX_WEBHOOK_BODY_SIZE + 1),
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "pull_request",
             "X-Hub-Signature-256": "not-checked-before-size-limit",
         },
@@ -311,6 +321,7 @@ def test_webhook_reports_processing_error(
         "/webhooks/github",
         content=body,
         headers={
+            "X-GitHub-Delivery": "test-delivery",
             "X-GitHub-Event": "pull_request",
             "X-Hub-Signature-256": sign(body),
         },

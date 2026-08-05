@@ -150,7 +150,10 @@ def test_issue_installation_token_reports_installation_lookup_error(
     ):
         issue_installation_token(repository, settings, client)
 
-    assert "get_repository_installation failed with status 404" in caplog.text
+    assert (
+        "get_repository_installation failed for fastapi/fastapi with status 404"
+        in caplog.text
+    )
 
 
 def test_issue_installation_token_reports_token_request_error(
@@ -172,7 +175,10 @@ def test_issue_installation_token_reports_token_request_error(
     ):
         issue_installation_token(repository, settings, client)
 
-    assert "create_installation_token failed with status 403" in caplog.text
+    assert (
+        "create_installation_token failed for fastapi/fastapi with status 403"
+        in caplog.text
+    )
 
 
 @pytest.mark.parametrize(

@@ -17,13 +17,16 @@ class GitHubAPIError(RuntimeError):
     pass
 
 
-def raise_for_github_status(response: httpx.Response, operation: str) -> None:
+def raise_for_github_status(
+    response: httpx.Response, operation: str, repository: Repository
+) -> None:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as error:
         logger.error(
-            "GitHub API operation %s failed with status %s",
+            "GitHub API operation %s failed for %s with status %s",
             operation,
+            repository.full_name,
             response.status_code,
         )
         raise GitHubAPIError(
@@ -54,11 +57,16 @@ def issue_installation_token(
         f"/repos/{repository.full_name}/installation",
         headers=app_headers,
     )
-    raise_for_github_status(installation_response, "get_repository_installation")
+    raise_for_github_status(
+        installation_response, "get_repository_installation", repository
+    )
     try:
         installation = Installation.model_validate_json(installation_response.content)
     except ValueError as error:
-        logger.error("GitHub returned an invalid repository installation response")
+        logger.error(
+            "GitHub returned an invalid repository installation response for %s",
+            repository.full_name,
+        )
         raise GitHubAPIError(
             "GitHub rejected the installation token request"
         ) from error
@@ -71,11 +79,14 @@ def issue_installation_token(
             "permissions": {"contents": "write"},
         },
     )
-    raise_for_github_status(token_response, "create_installation_token")
+    raise_for_github_status(token_response, "create_installation_token", repository)
     try:
         token = InstallationToken.model_validate_json(token_response.content)
     except ValueError as error:
-        logger.error("GitHub returned an invalid installation token response")
+        logger.error(
+            "GitHub returned an invalid installation token response for %s",
+            repository.full_name,
+        )
         raise GitHubAPIError(
             "GitHub rejected the installation token request"
         ) from error
@@ -88,7 +99,8 @@ def issue_installation_token(
     ):
         logger.error(
             "GitHub returned an unexpected installation token scope: "
-            "permissions=%s repository_selection=%s repository_ids=%s",
+            "repository=%s permissions=%s repository_selection=%s repository_ids=%s",
+            repository.full_name,
             token.permissions,
             token.repository_selection,
             repository_ids,

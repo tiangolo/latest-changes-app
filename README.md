@@ -9,7 +9,9 @@ It looks for the first existing file in this order:
 3. `docs/en/docs/release-notes.md`
 4. `CHANGELOG.md`
 
-The file must contain `## Latest Changes`. That section may contain only the `###` sections listed below, with each section appearing at most once.
+If none of these files exists, the app creates `release-notes.md`.
+
+An existing file must contain `## Latest Changes`. That section may contain only the `###` sections listed below, with each section appearing at most once.
 
 The first matching pull request label determines the section:
 

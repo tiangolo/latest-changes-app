@@ -1,4 +1,5 @@
 import base64
+import json
 
 import httpx
 import jwt
@@ -253,24 +254,29 @@ def test_get_latest_changes_file_uses_first_existing_path(
         "docs/en/docs/release-notes.md",
         "CHANGELOG.md",
     ]
+    assert result is not None
     assert result.path == existing_path
     assert paths == supported_paths[: supported_paths.index(existing_path) + 1]
 
 
-def test_get_latest_changes_file_rejects_missing_or_large_file(
+def test_get_latest_changes_file_returns_none_when_missing(
     repository: Repository,
 ) -> None:
     def missing(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, request=request)
 
-    with (
-        httpx.Client(
-            base_url="https://api.github.test",
-            transport=httpx.MockTransport(missing),
-        ) as client,
-        pytest.raises(LatestChangesError, match="No supported"),
-    ):
-        get_latest_changes_file(repository, "token", client)
+    with httpx.Client(
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(missing),
+    ) as client:
+        result = get_latest_changes_file(repository, "token", client)
+
+    assert result is None
+
+
+def test_get_latest_changes_file_rejects_large_file(
+    repository: Repository,
+) -> None:
 
     def large_without_content(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -725,6 +731,48 @@ def test_update_latest_changes_retries_stale_sha(
 
     assert result == ("updated", "release-notes.md")
     assert put_count == 2
+
+
+@pytest.mark.parametrize("conflict_status", [409, 422])
+def test_update_latest_changes_creates_missing_file_and_retries_conflict(
+    repository: Repository,
+    pull_request: PullRequest,
+    conflict_status: int,
+) -> None:
+    requests: list[httpx.Request] = []
+    file_exists = False
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal file_exists
+        requests.append(request)
+        if request.method == "GET":
+            if file_exists and request.url.path.endswith("/release-notes.md"):
+                return httpx.Response(
+                    200,
+                    json=repository_file("## Latest Changes\n").model_dump(),
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+        file_exists = True
+        if sum(item.method == "PUT" for item in requests) == 1:
+            return httpx.Response(conflict_status, request=request)
+        return httpx.Response(200, request=request)
+
+    with httpx.Client(
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        result = update_latest_changes(repository, pull_request, "token", client)
+
+    updates = [
+        json.loads(request.read()) for request in requests if request.method == "PUT"
+    ]
+    assert result == ("updated", "release-notes.md")
+    assert "sha" not in updates[0]
+    assert updates[1]["sha"] == "blob-sha"
+    created_content = base64.b64decode(updates[0]["content"]).decode()
+    assert created_content.startswith("# Release Notes\n\n## Latest Changes\n")
+    assert "### Features" in created_content
 
 
 def test_update_latest_changes_returns_unchanged(

@@ -11,6 +11,7 @@ LATEST_CHANGES_FILES = (
     "docs/en/docs/release-notes.md",
     "CHANGELOG.md",
 )
+DEFAULT_LATEST_CHANGES = "# Release Notes\n\n## Latest Changes\n"
 MAX_FILE_SIZE = 1_000_000
 COMMIT_MESSAGE = "📝 Update release notes\n\n[skip ci]"
 MAX_UPDATE_ATTEMPTS = 3
@@ -36,7 +37,7 @@ def get_latest_changes_file(
     repository: Repository,
     token: str,
     client: httpx.Client,
-) -> RepositoryFile:
+) -> RepositoryFile | None:
     headers = github_headers(token)
     for path in LATEST_CHANGES_FILES:
         response = client.get(
@@ -56,7 +57,7 @@ def get_latest_changes_file(
         if repository_file.encoding != "base64":
             raise GitHubAPIError("GitHub did not return the release-notes contents")
         return repository_file
-    raise LatestChangesError("No supported release-notes file was found")
+    return None
 
 
 def decode_file(repository_file: RepositoryFile) -> str:
@@ -78,29 +79,44 @@ def update_latest_changes(
     attempt = 1
     while True:
         repository_file = get_latest_changes_file(repository, token, client)
-        current_content = decode_file(repository_file)
+        current_content = (
+            decode_file(repository_file)
+            if repository_file is not None
+            else DEFAULT_LATEST_CHANGES
+        )
         updated_content = generate_latest_changes(current_content, pull_request)
-        if updated_content == current_content:
+        if repository_file is not None and updated_content == current_content:
             return "unchanged", repository_file.path
 
-        response = client.put(
-            f"/repos/{repository.full_name}/contents/{repository_file.path}",
-            headers=headers,
-            json={
-                "message": COMMIT_MESSAGE,
-                "content": base64.b64encode(updated_content.encode()).decode(),
-                "sha": repository_file.sha,
-                "branch": repository.default_branch,
-            },
+        path = (
+            repository_file.path
+            if repository_file is not None
+            else LATEST_CHANGES_FILES[0]
         )
-        if response.status_code == 409 and attempt < MAX_UPDATE_ATTEMPTS:
+        update: dict[str, str] = {
+            "message": COMMIT_MESSAGE,
+            "content": base64.b64encode(updated_content.encode()).decode(),
+            "branch": repository.default_branch,
+        }
+        if repository_file is not None:
+            update["sha"] = repository_file.sha
+        response = client.put(
+            f"/repos/{repository.full_name}/contents/{path}",
+            headers=headers,
+            json=update,
+        )
+        if (
+            response.status_code == 409
+            or repository_file is None
+            and response.status_code == 422
+        ) and attempt < MAX_UPDATE_ATTEMPTS:
             attempt += 1
             continue
         try:
             response.raise_for_status()
         except httpx.HTTPError as error:
             raise GitHubAPIError("GitHub rejected the release-notes update") from error
-        return "updated", repository_file.path
+        return "updated", path
 
 
 def generate_latest_changes(content: str, pull_request: PullRequest) -> str:

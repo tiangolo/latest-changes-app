@@ -10,6 +10,7 @@
 
 ### Internal
 
+* ⬆ Bump the github-actions group across 1 directory with 4 updates. PR [#1](https://github.com/tiangolo/latest-changes-app/pull/1) by [@dependabot[bot]](https://github.com/apps/dependabot).
 * 🍱 Add logo. PR [#5](https://github.com/tiangolo/latest-changes-app/pull/5) by [@tiangolo](https://github.com/tiangolo).
 
 ## 0.0.2 (2026-08-05)

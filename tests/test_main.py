@@ -324,7 +324,19 @@ def test_webhook_reports_processing_error(
                 },
                 request=request,
             )
-        return httpx.Response(404, request=request)
+        content = "# Release Notes\n"
+        return httpx.Response(
+            200,
+            json={
+                "type": "file",
+                "path": "release-notes.md",
+                "sha": "blob-sha",
+                "size": len(content),
+                "encoding": "base64",
+                "content": base64.b64encode(content.encode()).decode(),
+            },
+            request=request,
+        )
 
     body = json.dumps(webhook_payload).encode()
     client_factory(handle)

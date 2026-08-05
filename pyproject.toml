@@ -1,0 +1,29 @@
+[project]
+name = "latest-changes-app"
+version = "0.0.1"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "pydantic-settings>=2.14.2",
+    "pyjwt[crypto]>=2.13.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.9.1",
+    "prek>=0.4.12",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.0",
+    "ty>=0.0.65",
+    "zizmor>=1.29.0",
+]
+
+[tool.fastapi]
+entrypoint = "app.main:app"
+
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=100"
+pythonpath = ["."]
+testpaths = ["tests"]

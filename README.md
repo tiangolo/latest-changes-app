@@ -56,6 +56,17 @@ uv run fastapi deploy
 
 Then make sure to set the secrets and env vars in the FastAPI Cloud dashboard.
 
+To deploy automatically, configure these GitHub repository variables and secrets:
+
+| Type | Development | Production |
+| --- | --- | --- |
+| Variable | `FASTAPI_CLOUD_DEVELOPMENT_APP_ID` | `FASTAPI_CLOUD_PRODUCTION_APP_ID` |
+| Secret | `FASTAPI_CLOUD_DEVELOPMENT_TOKEN` | `FASTAPI_CLOUD_PRODUCTION_TOKEN` |
+
+Merges to `main` deploy to development. Publishing a GitHub release deploys its tag to production. Either deployment stays disabled when its App ID variable is not configured.
+
+The Prepare Release workflow requires a repository secret named `RELEASE_PR_TOKEN`. It creates a release pull request. Merging that pull request creates a draft GitHub release; publishing the draft deploys it to production.
+
 ## GitHub App
 
 Configure the App with `Contents: Read and write`, `Pull requests: Read`, the `Pull request` event, and this webhook URL:

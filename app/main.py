@@ -41,6 +41,11 @@ GitHubClientDep = Annotated[
 ]
 
 
+@app.get("/", tags=["system"])
+def root() -> dict[str, str]:
+    return {"name": app.title, "version": app.version}
+
+
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok"}

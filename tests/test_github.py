@@ -71,7 +71,7 @@ def test_issue_installation_token_is_repository_scoped(
         algorithms=["RS256"],
         options={"verify_aud": False},
     )
-    assert payload["iss"] == "123"
+    assert payload["iss"] == "Iv23exampleClientId"
 
 
 @pytest.mark.parametrize(

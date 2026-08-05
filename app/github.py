@@ -20,7 +20,7 @@ def create_app_jwt(settings: Settings) -> str:
         {
             "iat": now - timedelta(seconds=60),
             "exp": now + timedelta(minutes=9),
-            "iss": str(settings.github_app_id),
+            "iss": settings.github_client_id,
         },
         settings.github_app_private_key.get_secret_value(),
         algorithm="RS256",

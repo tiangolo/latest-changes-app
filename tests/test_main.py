@@ -22,7 +22,7 @@ def api_client(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[TestClient]:
-    monkeypatch.setenv("GITHUB_APP_ID", str(settings.github_app_id))
+    monkeypatch.setenv("GITHUB_CLIENT_ID", settings.github_client_id)
     monkeypatch.setenv(
         "GITHUB_APP_PRIVATE_KEY",
         settings.github_app_private_key.get_secret_value(),

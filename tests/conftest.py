@@ -48,7 +48,7 @@ def public_key(private_key: str) -> str:
 @pytest.fixture
 def settings(private_key: str) -> Settings:
     return Settings(
-        github_app_id=123,
+        github_client_id="Iv23exampleClientId",
         github_app_private_key=private_key,
         github_webhook_secret="webhook-secret",
     )

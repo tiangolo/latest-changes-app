@@ -11,7 +11,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    github_app_id: int
+    github_client_id: str
     github_app_private_key: SecretStr
     github_webhook_secret: SecretStr
 

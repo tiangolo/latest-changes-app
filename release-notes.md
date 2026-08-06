@@ -2,6 +2,8 @@
 
 ## Latest Changes
 
+## 0.0.3 (2026-08-06)
+
 ### Features
 
 * ✨ Add root identity endpoint. PR [#6](https://github.com/tiangolo/latest-changes-app/pull/6) by [@tiangolo](https://github.com/tiangolo).

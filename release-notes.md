@@ -2,6 +2,10 @@
 
 ## Latest Changes
 
+### Internal
+
+* 🎨 Add a safe area to the logo. PR [#9](https://github.com/tiangolo/latest-changes-app/pull/9) by [@tiangolo](https://github.com/tiangolo).
+
 ## 0.0.3 (2026-08-06)
 
 ### Features

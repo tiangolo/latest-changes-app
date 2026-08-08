@@ -2,6 +2,8 @@
 
 ## Latest Changes
 
+## 0.0.4 (2026-08-08)
+
 ### Internal
 
 * ✨ Use PR Submit for automated PRs. PR [#10](https://github.com/tiangolo/latest-changes-app/pull/10) by [@tiangolo](https://github.com/tiangolo).

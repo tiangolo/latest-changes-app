@@ -2,6 +2,10 @@
 
 ## Latest Changes
 
+### Features
+
+* ✨ Add pull request label status. PR [#12](https://github.com/tiangolo/latest-changes-app/pull/12) by [@tiangolo](https://github.com/tiangolo).
+
 ### Internal
 
 * ✨ Use PR Submit for automated PRs. PR [#10](https://github.com/tiangolo/latest-changes-app/pull/10) by [@tiangolo](https://github.com/tiangolo).

@@ -2,6 +2,8 @@
 
 ## Latest Changes
 
+## 0.0.4 (2026-08-10)
+
 ### Features
 
 * ✨ Add pull request label status. PR [#12](https://github.com/tiangolo/latest-changes-app/pull/12) by [@tiangolo](https://github.com/tiangolo).

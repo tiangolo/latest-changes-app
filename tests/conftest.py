@@ -18,6 +18,7 @@ from app.models import (
     Label,
     PullRequest,
     PullRequestBase,
+    PullRequestHead,
     Repository,
 )
 
@@ -76,6 +77,7 @@ def pull_request() -> PullRequest:
         ),
         labels=[Label(name="feature")],
         base=PullRequestBase(ref="master"),
+        head=PullRequestHead(sha="head-sha"),
     )
 
 

@@ -11,11 +11,31 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
-from app.github import GITHUB_API_URL, GitHubAPIError, issue_installation_token
-from app.latest_changes import LatestChangesError, update_latest_changes
+from app.github import (
+    GITHUB_API_URL,
+    LABEL_STATUS_PERMISSIONS,
+    GitHubAPIError,
+    create_commit_status,
+    get_pull_request,
+    issue_installation_token,
+)
+from app.latest_changes import (
+    LatestChangesError,
+    classify_latest_changes_labels,
+    get_latest_changes_label,
+    update_latest_changes,
+)
 from app.models import PullRequestWebhook, WebhookResponse
 
 MAX_WEBHOOK_BODY_SIZE = 1_000_000
+LABEL_STATUS_ACTIONS = {
+    "edited",
+    "labeled",
+    "opened",
+    "reopened",
+    "synchronize",
+    "unlabeled",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +87,53 @@ def process_pull_request_webhook(
 ) -> WebhookResponse:
     pull_request = webhook.pull_request
     repository = webhook.repository
-    if (
-        webhook.action != "closed"
-        or not pull_request.merged
-        or pull_request.base.ref != repository.default_branch
-    ):
+    if pull_request.base.ref != repository.default_branch:
         return WebhookResponse(status="skipped", repository=repository.full_name)
 
-    labels = {label.name for label in pull_request.labels}
-    if "release" in labels:
+    if webhook.action in LABEL_STATUS_ACTIONS:
+        token = issue_installation_token(
+            repository,
+            settings,
+            github_client,
+            permissions=LABEL_STATUS_PERMISSIONS,
+        )
+        current_pull_request = get_pull_request(
+            repository,
+            pull_request.number,
+            token,
+            github_client,
+        )
+        if current_pull_request.base.ref != repository.default_branch:
+            return WebhookResponse(status="skipped", repository=repository.full_name)
+        label_status, matching_labels = classify_latest_changes_labels(
+            current_pull_request
+        )
+        if label_status == "pending":
+            description = "Waiting for one Latest Changes label"
+        elif label_status == "success":
+            description = f"Latest Changes label: {matching_labels[0]}"
+        else:
+            description = "Multiple Latest Changes labels: " + ", ".join(
+                matching_labels
+            )
+        create_commit_status(
+            repository,
+            current_pull_request.head.sha,
+            label_status,
+            description,
+            token,
+            github_client,
+        )
+        return WebhookResponse(
+            status=label_status,
+            repository=repository.full_name,
+        )
+
+    if webhook.action != "closed" or not pull_request.merged:
+        return WebhookResponse(status="skipped", repository=repository.full_name)
+
+    selected_label = get_latest_changes_label(pull_request)
+    if selected_label == "release":
         return WebhookResponse(status="skipped", repository=repository.full_name)
 
     token = issue_installation_token(repository, settings, github_client)

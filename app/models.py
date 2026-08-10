@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 type UpdateStatus = Literal["updated", "unchanged"]
+type CommitStatusState = Literal["pending", "success", "failure"]
 
 
 class GitHubUser(BaseModel):
@@ -19,6 +20,10 @@ class PullRequestBase(BaseModel):
     ref: str
 
 
+class PullRequestHead(BaseModel):
+    sha: str
+
+
 class PullRequest(BaseModel):
     number: int
     title: str
@@ -27,6 +32,7 @@ class PullRequest(BaseModel):
     user: GitHubUser
     labels: list[Label]
     base: PullRequestBase
+    head: PullRequestHead
 
 
 class Repository(BaseModel):
@@ -67,6 +73,6 @@ class RepositoryFile(BaseModel):
 
 
 class WebhookResponse(BaseModel):
-    status: UpdateStatus | Literal["skipped"]
+    status: UpdateStatus | CommitStatusState | Literal["skipped"]
     repository: str | None = None
     path: str | None = None

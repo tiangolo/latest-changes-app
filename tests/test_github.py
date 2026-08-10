@@ -6,9 +6,15 @@ import jwt
 import pytest
 
 from app.config import Settings
-from app.github import GitHubAPIError, issue_installation_token
+from app.github import (
+    GitHubAPIError,
+    create_commit_status,
+    get_pull_request,
+    issue_installation_token,
+)
 from app.latest_changes import (
     LatestChangesError,
+    classify_latest_changes_labels,
     decode_file,
     generate_latest_changes,
     get_latest_changes_file,
@@ -73,6 +79,51 @@ def test_issue_installation_token_is_repository_scoped(
         options={"verify_aud": False},
     )
     assert payload["iss"] == "Iv23exampleClientId"
+
+
+@pytest.mark.parametrize("response_type", ["error", "invalid"])
+def test_get_pull_request_reports_error(
+    repository: Repository,
+    caplog: pytest.LogCaptureFixture,
+    response_type: str,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if response_type == "error":
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, json={}, request=request)
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="pull-request request"),
+    ):
+        get_pull_request(repository, 42, "token", client)
+
+    if response_type == "invalid":
+        assert "invalid pull-request response" in caplog.text
+
+
+def test_create_commit_status_reports_error(repository: Repository) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, request=request)
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="commit-status request"),
+    ):
+        create_commit_status(
+            repository,
+            "head-sha",
+            "success",
+            "Latest Changes label: feature",
+            "token",
+            client,
+        )
 
 
 @pytest.mark.parametrize(
@@ -415,14 +466,13 @@ def test_generate_latest_changes_uses_predefined_label_order(
     assert generate_latest_changes(result, pull_request) == result
 
 
-def test_generate_latest_changes_without_known_label(
+def test_generate_latest_changes_rejects_missing_known_label(
     pull_request: PullRequest,
 ) -> None:
     unlabeled = pull_request.model_copy(update={"labels": []})
 
-    result = generate_latest_changes("## Latest Changes\n", unlabeled)
-
-    assert result.startswith("## Latest Changes\n\n* Add the feature.")
+    with pytest.raises(LatestChangesError, match="no recognized"):
+        generate_latest_changes("## Latest Changes\n", unlabeled)
 
 
 def test_generate_latest_changes_in_empty_release_before_history(
@@ -460,10 +510,9 @@ def test_generate_latest_changes_in_empty_release_before_history(
     )
 
 
-def test_generate_latest_changes_prepends_to_uncategorized_entries(
+def test_generate_latest_changes_preserves_uncategorized_entries(
     pull_request: PullRequest,
 ) -> None:
-    unlabeled = pull_request.model_copy(update={"labels": []})
     content = """## Latest Changes
 
 * Existing uncategorized change.
@@ -471,14 +520,17 @@ def test_generate_latest_changes_prepends_to_uncategorized_entries(
 ## 1.0.0
 """
 
-    result = generate_latest_changes(content, unlabeled)
+    result = generate_latest_changes(content, pull_request)
 
     assert (
         result
         == """## Latest Changes
 
-* Add the feature. PR [#42](https://github.com/fastapi/fastapi/pull/42) by [@contributor](https://github.com/contributor).
 * Existing uncategorized change.
+
+### Features
+
+* Add the feature. PR [#42](https://github.com/fastapi/fastapi/pull/42) by [@contributor](https://github.com/contributor).
 
 ## 1.0.0
 """
@@ -525,17 +577,46 @@ def test_generate_latest_changes_preserves_mixed_uncategorized_and_sections(
     )
 
 
-def test_generate_latest_changes_uses_first_matching_label(
+def test_generate_latest_changes_rejects_multiple_matching_labels(
     pull_request: PullRequest,
 ) -> None:
     multiple_labels = pull_request.model_copy(
         update={"labels": [Label(name="bug"), Label(name="feature")]}
     )
 
-    result = generate_latest_changes("## Latest Changes\n", multiple_labels)
+    with pytest.raises(LatestChangesError, match="multiple Latest Changes labels"):
+        generate_latest_changes("## Latest Changes\n", multiple_labels)
 
-    assert "### Features\n\n* Add the feature." in result
-    assert "### Fixes" not in result
+
+def test_generate_latest_changes_rejects_release_label(
+    pull_request: PullRequest,
+) -> None:
+    release = pull_request.model_copy(update={"labels": [Label(name="release")]})
+
+    with pytest.raises(LatestChangesError, match="must not update"):
+        generate_latest_changes("## Latest Changes\n", release)
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        ([], ("pending", ())),
+        (["unrelated"], ("pending", ())),
+        (["feature", "unrelated"], ("success", ("feature",))),
+        (["bug", "feature"], ("failure", ("feature", "bug"))),
+        (["release"], ("success", ("release",))),
+    ],
+)
+def test_classify_latest_changes_labels(
+    pull_request: PullRequest,
+    labels: list[str],
+    expected: tuple[str, tuple[str, ...]],
+) -> None:
+    updated = pull_request.model_copy(
+        update={"labels": [Label(name=label) for label in labels]}
+    )
+
+    assert classify_latest_changes_labels(updated) == expected
 
 
 def test_generate_latest_changes_reorders_existing_sections(

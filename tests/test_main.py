@@ -75,6 +75,23 @@ def client_factory(
         client.close()
 
 
+def installation_token_response(
+    request: httpx.Request,
+    permissions: dict[str, str],
+) -> httpx.Response:
+    return httpx.Response(
+        201,
+        json={
+            "token": "ghs_token",
+            "expires_at": "2026-07-30T15:00:00Z",
+            "permissions": {**permissions, "metadata": "read"},
+            "repository_selection": "selected",
+            "repositories": [{"id": 75369425}],
+        },
+        request=request,
+    )
+
+
 def test_root(api_client: TestClient) -> None:
     response = api_client.get("/")
 
@@ -127,17 +144,7 @@ def test_webhook_updates_release_notes(
         if request.url.path.endswith("/installation"):
             return httpx.Response(200, json={"id": 987}, request=request)
         if request.url.path.endswith("/access_tokens"):
-            return httpx.Response(
-                201,
-                json={
-                    "token": "ghs_token",
-                    "expires_at": "2026-07-30T15:00:00Z",
-                    "permissions": {"contents": "write", "metadata": "read"},
-                    "repository_selection": "selected",
-                    "repositories": [{"id": 75369425}],
-                },
-                request=request,
-            )
+            return installation_token_response(request, {"contents": "write"})
         if request.method == "GET":
             content = "## Latest Changes\n"
             return httpx.Response(
@@ -182,13 +189,12 @@ def test_webhook_updates_release_notes(
 @pytest.mark.parametrize(
     "changes",
     [
-        {"action": "opened"},
         {"pull_request": {"merged": False}},
         {"pull_request": {"base": {"ref": "other"}}},
         {"pull_request": {"labels": [{"name": "release"}]}},
     ],
 )
-def test_webhook_skips_unapproved_pull_request(
+def test_webhook_skips_pull_request_without_release_notes_update(
     webhook_payload: dict[str, Any],
     changes: dict[str, Any],
     api_client: TestClient,
@@ -219,6 +225,154 @@ def test_webhook_skips_unapproved_pull_request(
         "repository": "fastapi/fastapi",
         "path": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected_status", "expected_description"),
+    [
+        ([], "pending", "Waiting for one Latest Changes label"),
+        ([{"name": "feature"}], "success", "Latest Changes label: feature"),
+        (
+            [{"name": "bug"}, {"name": "feature"}],
+            "failure",
+            "Multiple Latest Changes labels: feature, bug",
+        ),
+        ([{"name": "release"}], "success", "Latest Changes label: release"),
+    ],
+)
+def test_webhook_reports_latest_changes_label_status(
+    webhook_payload: dict[str, Any],
+    labels: list[dict[str, str]],
+    expected_status: str,
+    expected_description: str,
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+) -> None:
+    webhook_payload["action"] = "opened"
+    webhook_payload["pull_request"]["labels"] = labels
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/installation"):
+            return httpx.Response(200, json={"id": 987}, request=request)
+        if request.url.path.endswith("/access_tokens"):
+            return installation_token_response(
+                request,
+                {"pull_requests": "read", "statuses": "write"},
+            )
+        if request.url.path.endswith("/pulls/42"):
+            return httpx.Response(
+                200,
+                json=webhook_payload["pull_request"],
+                request=request,
+            )
+        return httpx.Response(201, request=request)
+
+    body = json.dumps(webhook_payload).encode()
+    client_factory(handle)
+    response = api_client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Delivery": "test-delivery",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": sign(body),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": expected_status,
+        "repository": "fastapi/fastapi",
+        "path": None,
+    }
+    token_request = json.loads(requests[1].read())
+    assert token_request["permissions"] == {
+        "pull_requests": "read",
+        "statuses": "write",
+    }
+    pull_request_request = next(
+        request for request in requests if request.url.path.endswith("/pulls/42")
+    )
+    assert pull_request_request.headers["Authorization"] == "Bearer ghs_token"
+    status_request = requests[-1]
+    assert status_request.url.path == "/repos/fastapi/fastapi/statuses/head-sha"
+    assert json.loads(status_request.read()) == {
+        "state": expected_status,
+        "context": "latest-changes/label",
+        "description": expected_description,
+    }
+
+
+def test_webhook_skips_status_if_current_base_is_not_default(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+) -> None:
+    webhook_payload["action"] = "edited"
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/installation"):
+            return httpx.Response(200, json={"id": 987}, request=request)
+        if request.url.path.endswith("/access_tokens"):
+            return installation_token_response(
+                request,
+                {"pull_requests": "read", "statuses": "write"},
+            )
+        current_pull_request = {
+            **webhook_payload["pull_request"],
+            "base": {"ref": "other"},
+        }
+        return httpx.Response(200, json=current_pull_request, request=request)
+
+    body = json.dumps(webhook_payload).encode()
+    client_factory(handle)
+    response = api_client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Delivery": "test-delivery",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": sign(body),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "skipped"
+    assert requests[-1].url.path.endswith("/pulls/42")
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [[], [{"name": "feature"}, {"name": "bug"}]],
+)
+def test_webhook_rejects_merged_pull_request_with_invalid_labels(
+    webhook_payload: dict[str, Any],
+    labels: list[dict[str, str]],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+) -> None:
+    webhook_payload["pull_request"]["labels"] = labels
+    body = json.dumps(webhook_payload).encode()
+    client_factory(lambda request: pytest.fail("Unexpected GitHub call"))
+
+    response = api_client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Delivery": "test-delivery",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": sign(body),
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_webhook_skips_other_event(
@@ -320,17 +474,7 @@ def test_webhook_reports_processing_error(
         if request.url.path.endswith("/installation"):
             return httpx.Response(200, json={"id": 987}, request=request)
         if request.url.path.endswith("/access_tokens"):
-            return httpx.Response(
-                201,
-                json={
-                    "token": "ghs_token",
-                    "expires_at": "2026-07-30T15:00:00Z",
-                    "permissions": {"contents": "write", "metadata": "read"},
-                    "repository_selection": "selected",
-                    "repositories": [{"id": 75369425}],
-                },
-                request=request,
-            )
+            return installation_token_response(request, {"contents": "write"})
         content = "# Release Notes\n"
         return httpx.Response(
             200,

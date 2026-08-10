@@ -3,7 +3,13 @@ import base64
 import httpx
 
 from app.github import GitHubAPIError, github_headers
-from app.models import PullRequest, Repository, RepositoryFile, UpdateStatus
+from app.models import (
+    CommitStatusState,
+    PullRequest,
+    Repository,
+    RepositoryFile,
+    UpdateStatus,
+)
 
 LATEST_CHANGES_FILES = (
     "release-notes.md",
@@ -27,10 +33,37 @@ LABEL_SECTIONS = (
     ("infra", "Infrastructure"),
     ("internal", "Internal"),
 )
+LATEST_CHANGES_LABELS = (*tuple(label for label, _header in LABEL_SECTIONS), "release")
 
 
 class LatestChangesError(RuntimeError):
     pass
+
+
+def classify_latest_changes_labels(
+    pull_request: PullRequest,
+) -> tuple[CommitStatusState, tuple[str, ...]]:
+    labels = {label.name for label in pull_request.labels}
+    matching_labels = tuple(label for label in LATEST_CHANGES_LABELS if label in labels)
+    if not matching_labels:
+        return "pending", matching_labels
+    if len(matching_labels) == 1:
+        return "success", matching_labels
+    return "failure", matching_labels
+
+
+def get_latest_changes_label(pull_request: PullRequest) -> str:
+    status, matching_labels = classify_latest_changes_labels(pull_request)
+    if status == "pending":
+        raise LatestChangesError(
+            "The pull request has no recognized Latest Changes label"
+        )
+    if status == "failure":
+        raise LatestChangesError(
+            "The pull request has multiple Latest Changes labels: "
+            + ", ".join(matching_labels)
+        )
+    return matching_labels[0]
 
 
 def get_latest_changes_file(
@@ -181,15 +214,12 @@ def generate_latest_changes(content: str, pull_request: PullRequest) -> str:
             section_content.pop()
         sections[label] = section_content
 
-    labels = {label.name for label in pull_request.labels}
-    selected_label = next(
-        (label for label, _header in LABEL_SECTIONS if label in labels),
-        None,
-    )
-    if selected_label is None:
-        sectionless_lines = [message, *sectionless_lines]
-    else:
-        sections[selected_label] = [message, *sections.get(selected_label, [])]
+    selected_label = get_latest_changes_label(pull_request)
+    if selected_label == "release":
+        raise LatestChangesError(
+            "A pull request with the release label must not update Latest Changes"
+        )
+    sections[selected_label] = [message, *sections.get(selected_label, [])]
 
     rebuilt_release: list[str] = list(sectionless_lines)
     for label, header in LABEL_SECTIONS:

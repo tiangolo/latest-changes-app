@@ -13,7 +13,7 @@ If none of these files exists, the app creates `release-notes.md`.
 
 An existing file must contain `## Latest Changes`. That section may contain only the `###` sections listed below, with each section appearing at most once.
 
-The first matching pull request label determines the section:
+Each pull request must have exactly one Latest Changes label: either one of the section labels below or `release`. A section label determines the section:
 
 | Label | Section |
 | --- | --- |
@@ -28,9 +28,17 @@ The first matching pull request label determines the section:
 | `infra` | Infrastructure |
 | `internal` | Internal |
 
-If none of these labels match, the entry is added directly under `## Latest Changes`.
+Pull requests with the `release` label are skipped. The `release` label is mutually exclusive with the section labels above.
 
-Pull requests with the `release` label are skipped.
+For pull requests targeting the default branch, the app reports a commit status named `latest-changes/label`:
+
+| Matching labels | Status |
+| --- | --- |
+| None | Pending |
+| One section label or `release` | Success |
+| More than one | Failure |
+
+You can require this status in a branch rule or ruleset. Configure the Latest Changes GitHub App as the expected source of the status.
 
 ## Install
 
@@ -42,6 +50,7 @@ It needs the following permissions:
 | --- | --- |
 | Contents | Read and write |
 | Pull requests | Read |
+| Commit statuses | Read and write |
 | Metadata | Read (automatically included) |
 
 The app commits directly to the repository's default branch. If a ruleset prevents direct writes, add the GitHub App to its bypass list with **Always allow**.

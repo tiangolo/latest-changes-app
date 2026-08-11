@@ -2,6 +2,10 @@
 
 ## Latest Changes
 
+### Internal
+
+* ✨ Add automatic pull request labels. PR [#15](https://github.com/tiangolo/latest-changes-app/pull/15) by [@tiangolo](https://github.com/tiangolo).
+
 ## 0.0.4 (2026-08-10)
 
 ### Features

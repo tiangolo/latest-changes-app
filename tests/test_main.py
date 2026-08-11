@@ -10,7 +10,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as main_module
+from app.automatic_labels import AutomaticLabelsConfig, AutomaticLabelsConfigError
 from app.config import Settings, get_settings
+from app.github import LABEL_STATUS_PERMISSIONS, GitHubAPIError
 from app.main import (
     MAX_WEBHOOK_BODY_SIZE,
     app,
@@ -18,6 +21,10 @@ from app.main import (
     verify_webhook_signature,
 )
 from app.models import PullRequest, Repository
+
+EMPTY_AUTOMATIC_LABELS_CONFIG = AutomaticLabelsConfig.model_validate(
+    {"auto-labels": {}}
+)
 
 
 @pytest.fixture
@@ -90,6 +97,42 @@ def installation_token_response(
         },
         request=request,
     )
+
+
+def post_label_webhook(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+) -> tuple[Any, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/installation"):
+            return httpx.Response(200, json={"id": 987}, request=request)
+        if request.url.path.endswith("/access_tokens"):
+            return installation_token_response(request, LABEL_STATUS_PERMISSIONS)
+        if request.url.path.endswith("/pulls/42"):
+            return httpx.Response(
+                200,
+                json=webhook_payload["pull_request"],
+                request=request,
+            )
+        return httpx.Response(201, request=request)
+
+    body = json.dumps(webhook_payload).encode()
+    client_factory(handle)
+    response = api_client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-GitHub-Delivery": "test-delivery",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": sign(body),
+        },
+    )
+    return response, requests
 
 
 def test_root(api_client: TestClient) -> None:
@@ -190,7 +233,7 @@ def test_webhook_updates_release_notes(
     "changes",
     [
         {"pull_request": {"merged": False}},
-        {"pull_request": {"base": {"ref": "other"}}},
+        {"pull_request": {"base": {"ref": "other", "sha": "base-sha"}}},
         {"pull_request": {"labels": [{"name": "release"}]}},
     ],
 )
@@ -260,7 +303,7 @@ def test_webhook_reports_latest_changes_label_status(
         if request.url.path.endswith("/access_tokens"):
             return installation_token_response(
                 request,
-                {"pull_requests": "read", "statuses": "write"},
+                LABEL_STATUS_PERMISSIONS,
             )
         if request.url.path.endswith("/pulls/42"):
             return httpx.Response(
@@ -268,6 +311,8 @@ def test_webhook_reports_latest_changes_label_status(
                 json=webhook_payload["pull_request"],
                 request=request,
             )
+        if "/contents/.github/latest-changes.yml" in request.url.path:
+            return httpx.Response(404, request=request)
         return httpx.Response(201, request=request)
 
     body = json.dumps(webhook_payload).encode()
@@ -289,10 +334,7 @@ def test_webhook_reports_latest_changes_label_status(
         "path": None,
     }
     token_request = json.loads(requests[1].read())
-    assert token_request["permissions"] == {
-        "pull_requests": "read",
-        "statuses": "write",
-    }
+    assert token_request["permissions"] == LABEL_STATUS_PERMISSIONS
     pull_request_request = next(
         request for request in requests if request.url.path.endswith("/pulls/42")
     )
@@ -304,6 +346,218 @@ def test_webhook_reports_latest_changes_label_status(
         "context": "latest-changes/label",
         "description": expected_description,
     }
+
+
+def test_webhook_applies_automatic_label_on_open(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "opened"
+    webhook_payload["pull_request"]["labels"] = []
+    normalized: list[str | None] = []
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_labels_config",
+        lambda *args: EMPTY_AUTOMATIC_LABELS_CONFIG,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_label_candidate",
+        lambda *args: "docs",
+    )
+    monkeypatch.setattr(
+        main_module,
+        "normalize_pull_request_labels",
+        lambda repository, pull_request, selected, token, client: normalized.append(
+            selected
+        ),
+    )
+
+    response, requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == "success"
+    assert normalized == ["docs"]
+    assert json.loads(requests[-1].read())["description"] == (
+        "Latest Changes label: docs"
+    )
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        ([{"name": "internal"}], "internal"),
+        ([{"name": "feature"}, {"name": "internal"}], "feature"),
+    ],
+)
+def test_webhook_respects_manual_labels_without_reclassifying(
+    webhook_payload: dict[str, Any],
+    labels: list[dict[str, str]],
+    expected: str,
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "labeled"
+    webhook_payload["label"] = {"name": "internal"}
+    webhook_payload["pull_request"]["labels"] = labels
+    normalized: list[str | None] = []
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_labels_config",
+        lambda *args: EMPTY_AUTOMATIC_LABELS_CONFIG,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_label_candidate",
+        lambda *args: pytest.fail("Label events must not reclassify files"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "normalize_pull_request_labels",
+        lambda repository, pull_request, selected, token, client: normalized.append(
+            selected
+        ),
+    )
+
+    response, _requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == "success"
+    assert normalized == [expected]
+
+
+def test_webhook_reports_pending_after_label_removal(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "unlabeled"
+    webhook_payload["pull_request"]["labels"] = []
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_labels_config",
+        lambda *args: EMPTY_AUTOMATIC_LABELS_CONFIG,
+    )
+
+    response, requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == "pending"
+    assert json.loads(requests[-1].read())["state"] == "pending"
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected_status"),
+    [([], "failure"), ([{"name": "feature"}], "success")],
+)
+def test_webhook_handles_automatic_classification_error(
+    webhook_payload: dict[str, Any],
+    labels: list[dict[str, str]],
+    expected_status: str,
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "synchronize"
+    webhook_payload["pull_request"]["labels"] = labels
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_labels_config",
+        lambda *args: EMPTY_AUTOMATIC_LABELS_CONFIG,
+    )
+
+    def fail(*args: object) -> None:
+        raise GitHubAPIError("files unavailable")
+
+    monkeypatch.setattr(main_module, "get_automatic_label_candidate", fail)
+
+    response, _requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == expected_status
+
+
+def test_webhook_reports_invalid_automatic_configuration(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "opened"
+
+    def fail(*args: object) -> None:
+        raise AutomaticLabelsConfigError("invalid")
+
+    monkeypatch.setattr(main_module, "get_automatic_labels_config", fail)
+
+    response, requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == "failure"
+    assert json.loads(requests[-1].read())["description"] == (
+        "Invalid .github/latest-changes.yml configuration"
+    )
+
+
+def test_webhook_reports_label_mutation_error(
+    webhook_payload: dict[str, Any],
+    api_client: TestClient,
+    sign: Callable[[bytes], str],
+    client_factory: Callable[[Callable[[httpx.Request], httpx.Response]], httpx.Client],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook_payload["action"] = "reopened"
+    monkeypatch.setattr(
+        main_module,
+        "get_automatic_labels_config",
+        lambda *args: EMPTY_AUTOMATIC_LABELS_CONFIG,
+    )
+
+    def fail(*args: object) -> None:
+        raise GitHubAPIError("mutation failed")
+
+    monkeypatch.setattr(main_module, "normalize_pull_request_labels", fail)
+
+    response, requests = post_label_webhook(
+        webhook_payload,
+        api_client,
+        sign,
+        client_factory,
+    )
+
+    assert response.json()["status"] == "failure"
+    assert json.loads(requests[-1].read())["description"] == (
+        "Could not update Latest Changes labels"
+    )
 
 
 def test_webhook_skips_status_if_current_base_is_not_default(
@@ -322,11 +576,11 @@ def test_webhook_skips_status_if_current_base_is_not_default(
         if request.url.path.endswith("/access_tokens"):
             return installation_token_response(
                 request,
-                {"pull_requests": "read", "statuses": "write"},
+                LABEL_STATUS_PERMISSIONS,
             )
         current_pull_request = {
             **webhook_payload["pull_request"],
-            "base": {"ref": "other"},
+            "base": {"ref": "other", "sha": "base-sha"},
         }
         return httpx.Response(200, json=current_pull_request, request=request)
 

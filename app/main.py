@@ -10,6 +10,13 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from pydantic import ValidationError
 
+from app.automatic_labels import (
+    AutomaticLabelsConfigError,
+    get_automatic_label_candidate,
+    get_automatic_labels_config,
+    normalize_pull_request_labels,
+    select_latest_changes_label,
+)
 from app.config import Settings, get_settings
 from app.github import (
     GITHUB_API_URL,
@@ -25,7 +32,12 @@ from app.latest_changes import (
     get_latest_changes_label,
     update_latest_changes,
 )
-from app.models import PullRequestWebhook, WebhookResponse
+from app.models import (
+    CommitStatusState,
+    PullRequest,
+    PullRequestWebhook,
+    WebhookResponse,
+)
 
 MAX_WEBHOOK_BODY_SIZE = 1_000_000
 LABEL_STATUS_ACTIONS = {
@@ -80,6 +92,78 @@ def verify_webhook_signature(body: bytes, signature: str, secret: str) -> None:
         )
 
 
+def update_pull_request_label_status(
+    webhook: PullRequestWebhook,
+    pull_request: PullRequest,
+    token: str,
+    github_client: httpx.Client,
+) -> tuple[CommitStatusState, str]:
+    repository = webhook.repository
+    try:
+        automatic_config = get_automatic_labels_config(
+            repository,
+            token,
+            github_client,
+        )
+    except AutomaticLabelsConfigError:
+        return "failure", "Invalid .github/latest-changes.yml configuration"
+
+    if automatic_config is None:
+        label_status, matching_labels = classify_latest_changes_labels(pull_request)
+        if label_status == "pending":
+            return label_status, "Waiting for one Latest Changes label"
+        if label_status == "success":
+            return label_status, f"Latest Changes label: {matching_labels[0]}"
+        return label_status, "Multiple Latest Changes labels: " + ", ".join(
+            matching_labels
+        )
+
+    automatic_candidate = None
+    automatic_error = False
+    if webhook.action in {"opened", "synchronize"}:
+        try:
+            automatic_candidate = get_automatic_label_candidate(
+                repository,
+                pull_request,
+                automatic_config,
+                token,
+                github_client,
+            )
+        except GitHubAPIError:
+            automatic_error = True
+            logger.exception(
+                "Could not classify automatic labels for %s#%s",
+                repository.full_name,
+                pull_request.number,
+            )
+    explicit_label = (
+        webhook.label.name
+        if webhook.action == "labeled" and webhook.label is not None
+        else None
+    )
+    selected_label = select_latest_changes_label(
+        pull_request.labels,
+        explicit_label=explicit_label,
+        automatic_candidate=automatic_candidate,
+    )
+    if automatic_error and selected_label is None:
+        return "failure", "Could not determine an automatic label"
+
+    try:
+        normalize_pull_request_labels(
+            repository,
+            pull_request,
+            selected_label,
+            token,
+            github_client,
+        )
+    except GitHubAPIError:
+        return "failure", "Could not update Latest Changes labels"
+    if selected_label is None:
+        return "pending", "Waiting for one Latest Changes label"
+    return "success", f"Latest Changes label: {selected_label}"
+
+
 def process_pull_request_webhook(
     webhook: PullRequestWebhook,
     settings: Settings,
@@ -105,17 +189,13 @@ def process_pull_request_webhook(
         )
         if current_pull_request.base.ref != repository.default_branch:
             return WebhookResponse(status="skipped", repository=repository.full_name)
-        label_status, matching_labels = classify_latest_changes_labels(
-            current_pull_request
+
+        label_status, description = update_pull_request_label_status(
+            webhook,
+            current_pull_request,
+            token,
+            github_client,
         )
-        if label_status == "pending":
-            description = "Waiting for one Latest Changes label"
-        elif label_status == "success":
-            description = f"Latest Changes label: {matching_labels[0]}"
-        else:
-            description = "Multiple Latest Changes labels: " + ", ".join(
-                matching_labels
-            )
         create_commit_status(
             repository,
             current_pull_request.head.sha,

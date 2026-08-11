@@ -8,14 +8,18 @@ import pytest
 from app.config import Settings
 from app.github import (
     GitHubAPIError,
+    RepositoryFileContentError,
     create_commit_status,
+    decode_repository_file,
     get_pull_request,
+    get_pull_request_files,
+    get_repository_file,
     issue_installation_token,
+    remove_pull_request_label,
 )
 from app.latest_changes import (
     LatestChangesError,
     classify_latest_changes_labels,
-    decode_file,
     generate_latest_changes,
     get_latest_changes_file,
     update_latest_changes,
@@ -105,6 +109,97 @@ def test_get_pull_request_reports_error(
         assert "invalid pull-request response" in caplog.text
 
 
+def test_get_pull_request_files_paginates(
+    repository: Repository,
+    pull_request: PullRequest,
+) -> None:
+    pull_request = pull_request.model_copy(update={"changed_files": 101})
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        page = int(request.url.params["page"])
+        count = 100 if page == 1 else 1
+        return httpx.Response(
+            200,
+            json=[
+                {"filename": f"file-{page}-{index}.txt", "status": "modified"}
+                for index in range(count)
+            ],
+            request=request,
+        )
+
+    with httpx.Client(
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        files = get_pull_request_files(repository, pull_request, "token", client)
+
+    assert len(files) == 101
+    assert [request.url.params["page"] for request in requests] == ["1", "2"]
+    assert all(request.url.params["per_page"] == "100" for request in requests)
+
+
+@pytest.mark.parametrize("response_type", ["error", "invalid", "incomplete"])
+def test_get_pull_request_files_reports_error(
+    repository: Repository,
+    pull_request: PullRequest,
+    response_type: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    if response_type == "incomplete":
+        pull_request = pull_request.model_copy(update={"changed_files": 2})
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if response_type == "error":
+            return httpx.Response(500, request=request)
+        if response_type == "invalid":
+            return httpx.Response(200, json=[{}], request=request)
+        return httpx.Response(
+            200,
+            json=[{"filename": "one.txt", "status": "modified"}],
+            request=request,
+        )
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="pull-request files request"),
+    ):
+        get_pull_request_files(repository, pull_request, "token", client)
+
+    if response_type == "invalid":
+        assert "invalid pull-request files response" in caplog.text
+    elif response_type == "incomplete":
+        assert "incomplete pull-request files response" in caplog.text
+
+
+@pytest.mark.parametrize("response_type", ["error", "invalid"])
+def test_get_repository_file_reports_error(
+    repository: Repository,
+    response_type: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if response_type == "error":
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, json={}, request=request)
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(GitHubAPIError, match="repository file request"),
+    ):
+        get_repository_file(repository, "pyproject.toml", "head-sha", "token", client)
+
+    if response_type == "invalid":
+        assert "invalid repository file response" in caplog.text
+
+
 def test_create_commit_status_reports_error(repository: Repository) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, request=request)
@@ -121,6 +216,27 @@ def test_create_commit_status_reports_error(repository: Repository) -> None:
             "head-sha",
             "success",
             "Latest Changes label: feature",
+            "token",
+            client,
+        )
+
+
+def test_remove_pull_request_label_ignores_missing_label(
+    repository: Repository,
+    pull_request: PullRequest,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/issues/42/labels/internal")
+        return httpx.Response(404, request=request)
+
+    with httpx.Client(
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        remove_pull_request_label(
+            repository,
+            pull_request,
+            "internal",
             "token",
             client,
         )
@@ -325,101 +441,33 @@ def test_get_latest_changes_file_returns_none_when_missing(
     assert result is None
 
 
-def test_get_latest_changes_file_rejects_large_file(
-    repository: Repository,
-) -> None:
-
-    def large_without_content(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "type": "file",
-                "path": "release-notes.md",
-                "sha": "blob-sha",
-                "size": 1_000_001,
-                "encoding": "none",
-                "content": "",
-            },
-            request=request,
-        )
-
-    with (
-        httpx.Client(
-            base_url="https://api.github.test",
-            transport=httpx.MockTransport(large_without_content),
-        ) as client,
-        pytest.raises(LatestChangesError, match="too large"),
-    ):
-        get_latest_changes_file(repository, "token", client)
-
-
-def test_get_latest_changes_file_rejects_missing_content(
-    repository: Repository,
-) -> None:
-    def handle(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json=repository_file("content")
-            .model_copy(update={"encoding": "none", "content": ""})
-            .model_dump(),
-            request=request,
-        )
-
-    with (
-        httpx.Client(
-            base_url="https://api.github.test",
-            transport=httpx.MockTransport(handle),
-        ) as client,
-        pytest.raises(GitHubAPIError, match="did not return"),
-    ):
-        get_latest_changes_file(repository, "token", client)
-
-    def large(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json=repository_file("content", size=1_000_001).model_dump(),
-            request=request,
-        )
-
-    with (
-        httpx.Client(
-            base_url="https://api.github.test",
-            transport=httpx.MockTransport(large),
-        ) as client,
-        pytest.raises(LatestChangesError, match="too large"),
-    ):
-        get_latest_changes_file(repository, "token", client)
-
-
-def test_get_latest_changes_file_hides_invalid_response(
-    repository: Repository,
-) -> None:
-    def handle(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, request=request)
-
-    with (
-        httpx.Client(
-            base_url="https://api.github.test",
-            transport=httpx.MockTransport(handle),
-        ) as client,
-        pytest.raises(GitHubAPIError, match="release-notes request"),
-    ):
-        get_latest_changes_file(repository, "token", client)
-
-
-def test_decode_file_rejects_invalid_content() -> None:
-    invalid = repository_file("content").model_copy(update={"content": "not-base64"})
-
-    with pytest.raises(LatestChangesError, match="valid UTF-8"):
-        decode_file(invalid)
-
-
-def test_decode_file_accepts_wrapped_base64() -> None:
+def test_decode_repository_file_accepts_wrapped_base64() -> None:
     wrapped = repository_file("content").model_copy(
         update={"content": "Y29u\ndGVudA=="}
     )
 
-    assert decode_file(wrapped) == "content"
+    assert (
+        decode_repository_file(wrapped, max_size=100, description="test") == "content"
+    )
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"size": 101}, "too large"),
+        ({"encoding": "utf-8"}, "did not return"),
+        ({"content": "not-base64"}, "not valid UTF-8"),
+        ({"content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
+    ],
+)
+def test_decode_repository_file_rejects_invalid_content(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    file = repository_file("content").model_copy(update=updates)
+
+    with pytest.raises(RepositoryFileContentError, match=message):
+        decode_repository_file(file, max_size=100, description="test")
 
 
 def test_generate_latest_changes_uses_predefined_label_order(
@@ -876,6 +924,27 @@ def test_update_latest_changes_returns_unchanged(
         result = update_latest_changes(repository, pull_request, "token", client)
 
     assert result == ("unchanged", "release-notes.md")
+
+
+def test_update_latest_changes_rejects_invalid_file(
+    repository: Repository,
+    pull_request: PullRequest,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=repository_file("content", size=1_000_001).model_dump(),
+            request=request,
+        )
+
+    with (
+        httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handle),
+        ) as client,
+        pytest.raises(LatestChangesError, match="too large"),
+    ):
+        update_latest_changes(repository, pull_request, "token", client)
 
 
 def test_update_latest_changes_hides_update_error(

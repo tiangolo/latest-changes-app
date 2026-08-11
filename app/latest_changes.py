@@ -2,7 +2,13 @@ import base64
 
 import httpx
 
-from app.github import GitHubAPIError, github_headers
+from app.github import (
+    GitHubAPIError,
+    RepositoryFileContentError,
+    decode_repository_file,
+    get_repository_file,
+    github_headers,
+)
 from app.models import (
     CommitStatusState,
     PullRequest,
@@ -71,35 +77,18 @@ def get_latest_changes_file(
     token: str,
     client: httpx.Client,
 ) -> RepositoryFile | None:
-    headers = github_headers(token)
     for path in LATEST_CHANGES_FILES:
-        response = client.get(
-            f"/repos/{repository.full_name}/contents/{path}",
-            headers=headers,
-            params={"ref": repository.default_branch},
+        repository_file = get_repository_file(
+            repository,
+            path,
+            repository.default_branch,
+            token,
+            client,
         )
-        if response.status_code == 404:
+        if repository_file is None:
             continue
-        try:
-            response.raise_for_status()
-            repository_file = RepositoryFile.model_validate_json(response.content)
-        except (httpx.HTTPError, ValueError) as error:
-            raise GitHubAPIError("GitHub rejected the release-notes request") from error
-        if repository_file.size > MAX_FILE_SIZE:
-            raise LatestChangesError("The release-notes file is too large")
-        if repository_file.encoding != "base64":
-            raise GitHubAPIError("GitHub did not return the release-notes contents")
         return repository_file
     return None
-
-
-def decode_file(repository_file: RepositoryFile) -> str:
-    try:
-        encoded_content = "".join(repository_file.content.split())
-        raw_content = base64.b64decode(encoded_content, validate=True)
-        return raw_content.decode()
-    except (ValueError, UnicodeDecodeError) as error:
-        raise LatestChangesError("The release-notes file is not valid UTF-8") from error
 
 
 def update_latest_changes(
@@ -112,11 +101,17 @@ def update_latest_changes(
     attempt = 1
     while True:
         repository_file = get_latest_changes_file(repository, token, client)
-        current_content = (
-            decode_file(repository_file)
-            if repository_file is not None
-            else DEFAULT_LATEST_CHANGES
-        )
+        if repository_file is None:
+            current_content = DEFAULT_LATEST_CHANGES
+        else:
+            try:
+                current_content = decode_repository_file(
+                    repository_file,
+                    max_size=MAX_FILE_SIZE,
+                    description="release-notes",
+                )
+            except RepositoryFileContentError as error:
+                raise LatestChangesError(str(error)) from error
         updated_content = generate_latest_changes(current_content, pull_request)
         if repository_file is not None and updated_content == current_content:
             return "unchanged", repository_file.path

@@ -7,6 +7,7 @@ dependencies = [
     "fastapi[standard]>=0.141.1",
     "pydantic-settings>=2.14.2",
     "pyjwt[crypto]>=2.13.0",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

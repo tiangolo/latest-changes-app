@@ -76,7 +76,8 @@ def pull_request() -> PullRequest:
             html_url="https://github.com/contributor",
         ),
         labels=[Label(name="feature")],
-        base=PullRequestBase(ref="master"),
+        changed_files=1,
+        base=PullRequestBase(ref="master", sha="base-sha"),
         head=PullRequestHead(sha="head-sha"),
     )
 

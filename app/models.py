@@ -18,6 +18,7 @@ class Label(BaseModel):
 
 class PullRequestBase(BaseModel):
     ref: str
+    sha: str
 
 
 class PullRequestHead(BaseModel):
@@ -31,6 +32,7 @@ class PullRequest(BaseModel):
     merged: bool
     user: GitHubUser
     labels: list[Label]
+    changed_files: int | None = None
     base: PullRequestBase
     head: PullRequestHead
 
@@ -45,6 +47,7 @@ class PullRequestWebhook(BaseModel):
     action: str
     pull_request: PullRequest
     repository: Repository
+    label: Label | None = None
 
 
 class Installation(BaseModel):
@@ -70,6 +73,12 @@ class RepositoryFile(BaseModel):
     size: int
     encoding: str
     content: str
+
+
+class PullRequestFile(BaseModel):
+    filename: str
+    status: str
+    previous_filename: str | None = None
 
 
 class WebhookResponse(BaseModel):

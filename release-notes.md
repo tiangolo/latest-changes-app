@@ -2,6 +2,10 @@
 
 ## Latest Changes
 
+### Upgrades
+
+* ⬆️ Use latest-known uv and upgrade GitHub Actions. PR [#20](https://github.com/tiangolo/latest-changes-app/pull/20) by [@dependabot[bot]](https://github.com/apps/dependabot).
+
 ## 0.0.5 (2026-08-11)
 
 ### Features

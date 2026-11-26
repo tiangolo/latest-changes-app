@@ -4,21 +4,21 @@ version = "0.0.5"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi[standard]>=0.141.1",
-    "pydantic-settings>=2.14.2",
-    "pyjwt[crypto]>=2.13.0",
+    "fastapi[standard]>=0.165.0",
+    "pydantic-settings>=2.16.3",
+    "pyjwt[crypto]>=2.15.1",
     "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.9.1",
-    "prek>=0.4.12",
-    "pytest>=9.1.1",
+    "httpx2>=2.16.2",
+    "prek>=0.5.11",
+    "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
-    "typer>=0.21.0",
-    "ty>=0.0.65",
+    "ruff>=0.17.5",
+    "typer>=0.29.2",
+    "ty>=0.0.107",
     "zizmor>=1.29.0",
 ]
 
